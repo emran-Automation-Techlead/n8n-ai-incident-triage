@@ -1,0 +1,7 @@
+{
+  "incident_id": "INC0104512",
+  "short_description": "Claims team cannot launch Citrix desktop - urgent",
+  "description": "Since 9:10 AM about 15 users in the Claims Processing team get 'Cannot start desktop' when opening the Citrix Workspace published desktop. Outlook and Teams work fine. They cannot process member claims (e.g. member MBR-4482913). Please call team lead Priya on +91 98480 22331 or email priya.k@example.com.",
+  "caller": "Priya K (Claims Processing)",
+  "reported_at": "2026-11-23T09:25:00+05:30"
+}
