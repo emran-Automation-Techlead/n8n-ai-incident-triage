@@ -1,0 +1,322 @@
+{
+  "name": "AI-Powered IT Incident Triage",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "68fdd7e2-355c-4484-b776-58db0dca4a2a",
+      "name": "Run Test Incident",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "bb80957a-477f-4dee-acf0-da38093aafde",
+              "name": "incident_id",
+              "value": "INC0104512",
+              "type": "string"
+            },
+            {
+              "id": "87cf2621-72f5-42d0-a9b2-535fbf1ac04f",
+              "name": "short_description",
+              "value": "Claims team cannot launch Citrix desktop - urgent",
+              "type": "string"
+            },
+            {
+              "id": "6beef207-3ddc-44e1-afc9-1af7140dc8ed",
+              "name": "description",
+              "value": "Since 9:10 AM about 15 users in the Claims Processing team get 'Cannot start desktop' when opening the Citrix Workspace published desktop. Outlook and Teams work fine. They cannot process member claims (e.g. member MBR-4482913). Please call team lead Priya on +91 98480 22331 or email priya.k@example.com.",
+              "type": "string"
+            },
+            {
+              "id": "c9806406-a904-4c4d-b5ba-8a9304c28ccc",
+              "name": "caller",
+              "value": "Priya K (Claims Processing)",
+              "type": "string"
+            },
+            {
+              "id": "6d35026b-bcb0-4173-8321-525d6f1fdbac",
+              "name": "reported_at",
+              "value": "2026-11-23T09:25:00+05:30",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5e19a566-36da-421f-b52a-1b63ae2cd250",
+      "name": "New Incident (sample)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// HIPAA-style guardrail: strip personal data BEFORE anything is sent to the LLM.\nconst patterns = [\n  [/[\\w.+-]+@[\\w-]+\\.[\\w.]+/g, '[EMAIL]'],\n  [/\\b(MBR|MEM)[-\\s]?\\d{6,}\\b/gi, '[MEMBER_ID]'],\n  [/\\+?\\d[\\d\\s-]{8,}\\d/g, '[PHONE]'],\n];\nreturn $input.all().map(item => {\n  const inc = { ...item.json };\n  let count = 0;\n  for (const field of ['short_description', 'description']) {\n    let text = String(inc[field] ?? '');\n    for (const [re, tag] of patterns) text = text.replace(re, () => { count++; return tag; });\n    inc[field] = text;\n  }\n  inc.pii_redactions = count;\n  return { json: inc };\n});\n"
+      },
+      "id": "13da3c68-8854-4c31-bdda-3539411fd07e",
+      "name": "Redact PII",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Knowledge retrieval: find the most similar past incidents (lightweight keyword scoring).\n// In production, swap this for a vector store / Jira / ServiceNow search.\nconst KB = [\n  { id: 'INC0081234', category: 'Access',   group: 'Citrix & VDI',      title: 'Citrix published desktop fails to launch - Cannot start desktop', resolution: 'Delivery Controller lost registration with the VDA machine catalogue after patching. Re-registered VDAs and restarted the Broker service; users relaunched sessions.' },\n  { id: 'INC0079911', category: 'Access',   group: 'Citrix & VDI',      title: 'Multiple users Citrix Workspace cannot start desktop after maintenance', resolution: 'StoreFront base URL certificate expired. Renewed certificate on StoreFront servers and reset Workspace app cache on affected machines.' },\n  { id: 'INC0076540', category: 'Access',   group: 'Identity & Access', title: 'User locked out of Active Directory account', resolution: 'Unlocked account in AD, cleared cached credentials on mobile device causing repeated lockouts.' },\n  { id: 'INC0072201', category: 'Email',    group: 'Messaging (M365)',  title: 'Outlook not syncing new emails', resolution: 'Rebuilt Outlook profile and cleared OST file; mailbox synced.' },\n  { id: 'INC0070088', category: 'Network',  group: 'Network Ops',       title: 'VPN disconnects every 10 minutes for remote users', resolution: 'Increased idle timeout on VPN concentrator and pushed updated client profile.' },\n  { id: 'INC0068815', category: 'Software', group: 'Desktop Support',   title: 'Claims application crashes on launch after update', resolution: 'Rolled back faulty client update via SCCM and raised vendor ticket.' },\n  { id: 'INC0066420', category: 'Hardware', group: 'Desktop Support',   title: 'Laptop docking station monitors not detected', resolution: 'Updated dock firmware and display drivers.' },\n  { id: 'INC0064102', category: 'Security', group: 'Security Ops',      title: 'Suspicious phishing email reported by several users', resolution: 'Purged message tenant-wide, blocked sender domain, reset passwords for users who clicked.' },\n];\nconst STOP = new Set(['the','and','for','are','but','not','with','when','after','about','users','user','team','they','get','from','this','that','please','since','opening','fine']);\nconst tokens = s => (String(s).toLowerCase().match(/[a-z0-9]+/g) || []).filter(w => w.length > 2 && !STOP.has(w));\n\nconst inc = $input.first().json;\nconst query = new Set(tokens(inc.short_description + ' ' + inc.description));\nconst ranked = KB.map(k => {\n  const doc = new Set(tokens(k.title + ' ' + k.resolution));\n  let hits = 0;\n  for (const w of query) if (doc.has(w)) hits++;\n  const score = hits / Math.sqrt((query.size * doc.size) || 1);\n  return { ...k, score: Number(score.toFixed(3)) };\n}).filter(k => k.score > 0).sort((a, b) => b.score - a.score).slice(0, 3);\n\nreturn [{ json: { ...inc, similar_incidents: ranked } }];\n"
+      },
+      "id": "a0fd6f0f-8e97-4928-a711-6f41b97d7664",
+      "name": "Retrieve Similar Past Resolutions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: 'gpt-4.1-mini',\n  temperature: 0,\n  response_format: { type: 'json_object' },\n  messages: [\n    { role: 'system', content: \"You are an IT service-desk triage assistant for a healthcare company. Use ONLY the incident and the similar past incidents provided. Return a JSON object with exactly these keys: category (one of Access, Network, Email, Hardware, Software, Security), priority (P1, P2, P3 or P4; P1 = outage blocking critical business for many users), assignment_group (one of Citrix & VDI, Identity & Access, Messaging (M365), Network Ops, Desktop Support, Security Ops), summary (max 2 sentences), suggested_resolution (steps for the engineer, based on the past incidents), cited_incidents (array of the past incident IDs you relied on), draft_reply (short, polite update to the caller; no promised timelines), confidence (number 0 to 1). If the past incidents do not support a resolution, say so and set confidence below 0.5.\" },\n    { role: 'user', content: JSON.stringify({\n        incident: { id: $json.incident_id, title: $json.short_description, description: $json.description },\n        similar_past_incidents: $json.similar_incidents\n    }) }\n  ]\n}) }}",
+        "options": {}
+      },
+      "id": "6af4b358-7390-4c8b-8815-29a6774dc99b",
+      "name": "AI Triage (GPT-4.1-mini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Guardrail: never trust raw LLM output. Validate it, then decide if a human must approve.\nconst ctx = $('Retrieve Similar Past Resolutions').first().json;\nconst CATEGORIES = ['Access', 'Network', 'Email', 'Hardware', 'Software', 'Security'];\nconst PRIORITIES = ['P1', 'P2', 'P3', 'P4'];\nconst GROUPS = ['Citrix & VDI', 'Identity & Access', 'Messaging (M365)', 'Network Ops', 'Desktop Support', 'Security Ops'];\n\nconst errors = [];\nlet ai = {};\ntry {\n  ai = JSON.parse($input.first().json.choices[0].message.content);\n} catch (e) {\n  errors.push('AI output was not valid JSON');\n}\nif (!CATEGORIES.includes(ai.category)) errors.push(`invalid category: ${ai.category}`);\nif (!PRIORITIES.includes(ai.priority)) errors.push(`invalid priority: ${ai.priority}`);\nif (!GROUPS.includes(ai.assignment_group)) errors.push(`invalid assignment group: ${ai.assignment_group}`);\n\nconst retrieved = new Set((ctx.similar_incidents || []).map(s => s.id));\nconst claimed = Array.isArray(ai.cited_incidents) ? ai.cited_incidents : [];\nconst cited = claimed.filter(id => retrieved.has(id));\nif (cited.length !== claimed.length) errors.push('AI cited an incident that was not retrieved');\n\nconst confidence = Number(ai.confidence);\nconst reasons = [...errors];\nif (['P1', 'P2'].includes(ai.priority)) reasons.push(`high priority (${ai.priority})`);\nif (!(confidence >= 0.75)) reasons.push(`confidence below 0.75 (${ai.confidence})`);\n\nreturn [{ json: {\n  incident_id: ctx.incident_id,\n  short_description: ctx.short_description,\n  pii_redactions: ctx.pii_redactions,\n  category: ai.category ?? null,\n  priority: ai.priority ?? null,\n  assignment_group: ai.assignment_group ?? null,\n  summary: ai.summary ?? null,\n  suggested_resolution: ai.suggested_resolution ?? null,\n  cited_incidents: cited,\n  draft_reply: ai.draft_reply ?? null,\n  confidence: Number.isFinite(confidence) ? confidence : null,\n  validation_errors: errors,\n  needs_review: reasons.length > 0,\n  review_reasons: reasons,\n} }];\n"
+      },
+      "id": "ebc763bd-2bf9-4eed-a91a-60fec93f0e5a",
+      "name": "Validate AI Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "78b2142d-38ca-48fe-969b-3111184ec5ed",
+              "leftValue": "={{ $json.needs_review }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3b2b546e-af0f-4508-818e-ca4dd883b05e",
+      "name": "Needs Human Approval?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "923a6acd-445e-4237-af75-f08ee8956499",
+              "name": "status",
+              "value": "PENDING_HUMAN_APPROVAL",
+              "type": "string"
+            },
+            {
+              "id": "c5beabe8-897b-47fc-a93d-c5235e6711b6",
+              "name": "next_step",
+              "value": "Engineer reviews AI triage and draft reply before anything is sent",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {},
+        "includeOtherFields": true
+      },
+      "id": "c89d8a59-ef83-4df0-a27d-790e3d754d0d",
+      "name": "Human Approval Queue",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1560,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "caa3568b-a1a5-4f4e-a4c4-55fbde8f08bb",
+              "name": "status",
+              "value": "AUTO_ROUTED",
+              "type": "string"
+            },
+            {
+              "id": "1715d457-0285-4cdd-8556-e1833628dbf2",
+              "name": "next_step",
+              "value": "Ticket assigned to suggested group; draft reply queued",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {},
+        "includeOtherFields": true
+      },
+      "id": "01939462-12fa-4805-90e2-044ca22a34d6",
+      "name": "Auto-Route Ticket",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1560,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## AI-Powered IT Incident Triage\n**Flow:** new incident \u2192 PII redaction \u2192 retrieve similar past resolutions \u2192 LLM triage (category, priority, group, summary, draft reply) \u2192 validate output \u2192 human approval for P1/P2, low confidence or invalid output.\n\n**Guardrails:** no personal data sent to the LLM \u00b7 answers grounded in retrieved incidents \u00b7 citations checked \u00b7 strict schema validation \u00b7 human-in-the-loop.\n\n_Production: swap the manual trigger for a Jira / ServiceNow trigger and the queue nodes for Slack or email 'send and wait for approval'._",
+        "height": 230,
+        "width": 640,
+        "color": 5
+      },
+      "id": "b1eab03b-52e9-4016-a8a6-bb7e6ee6df7f",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Run Test Incident": {
+      "main": [
+        [
+          {
+            "node": "New Incident (sample)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New Incident (sample)": {
+      "main": [
+        [
+          {
+            "node": "Redact PII",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redact PII": {
+      "main": [
+        [
+          {
+            "node": "Retrieve Similar Past Resolutions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve Similar Past Resolutions": {
+      "main": [
+        [
+          {
+            "node": "AI Triage (GPT-4.1-mini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Triage (GPT-4.1-mini)": {
+      "main": [
+        [
+          {
+            "node": "Validate AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate AI Output": {
+      "main": [
+        [
+          {
+            "node": "Needs Human Approval?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Human Approval?": {
+      "main": [
+        [
+          {
+            "node": "Human Approval Queue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Auto-Route Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
